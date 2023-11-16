@@ -267,3 +267,7 @@ bipolar_ch_names_03 = ['FP1-F7',
                    'C4-P4',
                    'P4-O2']
 
+
+anode = [anode_01, anode_02, anode_03, anode_04]
+cathode = [cathode_01, cathode_02, cathode_03, cathode_04]
+bipolar_ch_names = [bipolar_ch_names_01, bipolar_ch_names_02, bipolar_ch_names_03, bipolar_ch_names_04]

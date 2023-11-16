@@ -14,6 +14,9 @@ no_signal = ['EEG 100-REF','EEG 101-REF','EEG 102-REF','EEG 103-REF','EEG 104-RE
 
 custom_placement = ['EEG 1X10_LAT_01-','EEG 1X10_LAT_02-','EEG 1X10_LAT_03-','EEG 1X10_LAT_04-','EEG 1X10_LAT_05-','EEG 20-LE','EEG 20-REF','EEG 21-LE','EEG 21-REF','EEG 22-LE','EEG 22-REF','EEG 23-LE','EEG 23-REF','EEG 24-LE','EEG 24-REF','EEG 25-LE','EEG 25-REF','EEG 26-LE','EEG 26-REF','EEG 27-LE','EEG 27-REF','EEG 28-LE','EEG 28-REF','EEG 29-LE','EEG 29-REF','EEG 30-LE','EEG 30-REF','EEG 31-LE','EEG 31-REF','EEG 32-LE','EEG 32-REF','EEG X1-REF']
 
+channels_to_remove = unknown + DC_voltage + no_signal + custom_placement
+
+
 ############################################################################################################################
 # NON_EEG CHANNELS 
 

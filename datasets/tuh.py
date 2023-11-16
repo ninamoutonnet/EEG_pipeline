@@ -24,6 +24,8 @@ TUH Abnormal EEG Corpus.
 # 8. added csv file extraction of annotation for tusz, 
 # however this does not work yet as channels present 
 # in raw file and that of annotation do not match
+# 9. added debug and remove_unknown_channels and 
+#    _set_bipolar_tcp
 ########################################################
 
 import re
@@ -39,9 +41,9 @@ import numpy as np
 import mne
 from joblib import Parallel, delayed
 
-
 from .base import BaseDataset, BaseConcatDataset
-
+from .channel_clustering_TUH import channels_to_remove
+from .montage_TUSZ import cathode, anode, bipolar_ch_names 
 
 class TUH(BaseConcatDataset):
     """Temple University Hospital (TUH) EEG Corpus
@@ -66,9 +68,14 @@ class TUH(BaseConcatDataset):
     debug: bool
         If True, only select the first 100 files in the files paths option
         Added by Nina, check that this can be adapted for other TUH repositories
+    remove_unknown_channels: bool
+        If true, remove the channels that are unknown/contain no signal/are custom placement
+        This is provided in the appendix of https://isip.piconepress.com/publications/reports/2020/tuh_eeg/electrodes/
+    set_bipolar_tcp: bool
+        If true, you set the bipolar reference to a tcp montage
     """
     def __init__(self, path, recording_ids=None, target_name=None,
-                 preload=False, n_jobs=1, debug=False):
+                 preload=False, n_jobs=1, debug=False, remove_unknown_channels=False, set_bipolar_tcp=False):
                
         
         # create an index of all files and gather easily accessible info
@@ -94,35 +101,48 @@ class TUH(BaseConcatDataset):
         # reading the raws and potentially preloading the data
         # disable joblib for tests. mocking seems to fail otherwise
         if n_jobs == 1:
-            base_datasets = [self._create_dataset(descriptions[i], target_name, preload)
+            base_datasets = [self._create_dataset(descriptions[i], target_name, preload, remove_unknown_channels, 
+                                                  set_bipolar_tcp)
                 for i in descriptions.columns]
         else:
             base_datasets = Parallel(n_jobs)(delayed(
-                self._create_dataset)(descriptions[i], target_name, preload) for i in descriptions.columns)
+                self._create_dataset)(descriptions[i], target_name, preload, remove_unknown_channels, set_bipolar_tcp) for i 
+                                             in descriptions.columns)
         super().__init__(base_datasets)
 
     @staticmethod
-    def _create_dataset(description, target_name, preload):
+    def _create_dataset(description, target_name, preload, remove_unknown_channels, set_bipolar_tcp):
         file_path = description.loc['path']
 
         # parse age and gender information from EDF header
         age, gender = _parse_age_and_gender_from_edf_header(file_path)
         raw = mne.io.read_raw_edf(file_path, preload=preload)
         
+        # If remove_unknown_channels is set to True, remove the 'bad' channels at this step
+        if remove_unknown_channels:
+            raw = _remove_unknown_channels(raw, channels_to_remove)
+        
+        # If set_bipolar_tcp is true, re-reference. As this depends on the montage, extract that information first
+        if set_bipolar_tcp: 
+            raw = _set_bipolar_tcp(raw, file_path)
+        
         # if using TUSZ, extract the annotations here and add them to the raw files 
         # probably more efficient than doing it in the TUSZ class
         tokens = file_path.split(os.sep) 
         if ('tuh_eeg_seizure') in tokens:
             annotation_csvbi = _parse_term_based_annotations_from_csv_bi_file(file_path)
-            annotation_csv = _parse_term_based_annotations_from_csv_file(file_path)
-            #######################################################################################
-            #
-            # TODO: annotation_csv does not work as the ch_names do not match the raw file channels
-            # either re-reference the raw file (but i have not found a mne easy way to do this)
-            # or change the annotation references ? For now, use the binary annotations.
-            #  
-            #######################################################################################
-            raw = raw.set_annotations(annotation_csvbi, on_missing='warn')
+            
+            # annotation_csv does not work if the ch_names do not match the raw file channels
+            # so it needs to have a tcp re-reference the raw file 
+            if set_bipolar_tcp: 
+                annotation_csv = _parse_term_based_annotations_from_csv_file(file_path)
+                annotations = annotation_csvbi.append(onset=annotation_csv.onset, 
+                                                 duration=annotation_csv.duration, 
+                                                 description=annotation_csv.description,
+                                                 ch_names=annotation_csv.ch_names)
+                raw = raw.set_annotations(annotations, on_missing='warn')
+            else:
+                raw = raw.set_annotations(annotation_csvbi, on_missing='warn')
 
         meas_date = datetime(1, 1, 1, tzinfo=timezone.utc) \
             if raw.info['meas_date'] is None else raw.info['meas_date']
@@ -151,8 +171,30 @@ class TUH(BaseConcatDataset):
         base_dataset = BaseDataset(raw, description,
                                    target_name=target_name)
         return base_dataset
+
+def _set_bipolar_tcp(raw, file_path):
+    # find the montage from the name of the file
+    if '/01_tcp_ar/' in file_path: 
+        index = 0
+    elif '/02_tcp_le/' in file_path: 
+        index = 1
+    elif '/03_tcp_ar_a/' in file_path: 
+        index = 2
+    elif '/04_tcp_le_a/' in file_path: 
+        index = 3
     
+    sample_anode = anode[index]
+    sample_cathode = cathode[index]
+    sample_bipolar_ch_names = bipolar_ch_names[index]
     
+    raw = mne.set_bipolar_reference(raw, anode=sample_anode, cathode=sample_cathode, ch_name=sample_bipolar_ch_names, 
+                                    verbose='WARNING')
+    
+    return raw
+
+def _remove_unknown_channels(raw, channels_to_remove):
+    return raw.drop_channels(ch_names = channels_to_remove, on_missing='ignore')  
+   
         
 def _parse_term_based_annotations_from_csv_bi_file(file_path):
     csv_bi_path = file_path.replace('.edf', '.csv_bi')
@@ -162,9 +204,7 @@ def _parse_term_based_annotations_from_csv_bi_file(file_path):
     # version = csv_v1.0.0
     # bname = aaaaaajy_s001_t000
     # duration = 1750.00 secs
-    # mont
-    
-    _file = $NEDC_NFC/lib/nedc_eas_default_montage.txt
+    # montage_file = $NEDC_NFC/lib/nedc_eas_default_montage.txt
     #
     ###########################################################
     csvbi_file['duration'] =  csvbi_file.stop_time - csvbi_file.start_time
@@ -359,13 +399,14 @@ class TUHAbnormal(TUH):
         Added by Nina
     """
     def __init__(self, path, recording_ids=None, target_name='pathological',
-                 preload=False, n_jobs=1, debug=False):
+                 preload=False, n_jobs=1, debug=False, remove_unknown_channels=False, set_bipolar_tcp=False):
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore", message=".*not in description. '__getitem__'")
             super().__init__(path=path, recording_ids=recording_ids,
                              preload=preload, target_name=target_name,
-                             n_jobs=n_jobs, debug=debug)
+                             n_jobs=n_jobs, debug=debug, remove_unknown_channels=remove_unknown_channels, 
+                             set_bipolar_tcp=set_bipolar_tcp)
         additional_descriptions = []
         for file_path in self.description.path:
             additional_description = (self._parse_additional_description_from_file_path(file_path))
@@ -418,13 +459,15 @@ class TUHSeizure(TUH):
         Added by Nina
    
     """
-    def __init__(self, path, recording_ids = None, target_name=None, preload = False, n_jobs=1, debug = False):
+    def __init__(self, path, recording_ids = None, target_name=None, preload = False, n_jobs=1, debug = False, 
+                 remove_unknown_channels=False, set_bipolar_tcp=False):
         
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=".*not in description. '__getitem__'")
             super().__init__(path=path, recording_ids=recording_ids,
                              preload=preload, target_name=target_name,
-                             n_jobs=n_jobs, debug=debug)
+                             n_jobs=n_jobs, debug=debug, remove_unknown_channels=remove_unknown_channels, 
+                             set_bipolar_tcp=set_bipolar_tcp)
             
         additional_descriptions = []
         for file_path in self.description.path:
@@ -447,4 +490,6 @@ class TUHSeizure(TUH):
             'set': tokens[-5],
             'channel_config': tokens[-2]
         }
+
+    
 

@@ -200,7 +200,7 @@ def create_fixed_length_windows(
         start_offset_samples, stop_offset_samples, window_size_samples, window_stride_samples,
         drop_last_window)
 
-    # check if recordings are of different lengths
+    # check if recordings are of different lengths -> they are, this does not check for different length (Nina's comment)
     lengths = np.array([ds.raw.n_times for ds in concat_ds.datasets])
     if (np.diff(lengths) != 0).any() and window_size_samples is None:
         warnings.warn('Recordings have different lengths, they will not be batch-able!')
@@ -251,16 +251,23 @@ def _create_windows_from_events(
     ]
     if infer_mapping:
         unique_events = np.unique(ds.raw.annotations.description)
-        new_unique_events = [x for x in unique_events if x not in mapping]
+        new_unique_events = [x for x in unique_events if (x not in mapping and 'TERM' in x)] 
+        # this limits the mapping to only include Term base event 
         # mapping event descriptions to integers from 0 on
         max_id_existing_mapping = len(mapping)
         mapping.update({
                 event_name: i_event_type + max_id_existing_mapping
                 for i_event_type, event_name in enumerate(new_unique_events)
         })
-
+    
+    print(mapping)
+    
     events, events_id = mne.events_from_annotations(ds.raw, mapping)
     onsets = events[:, 0]
+    
+    print('events: ', events)
+    print('event_id', events_id)
+    
     # Onsets are relative to the beginning of the recording
     filtered_durations = np.array([
         a['duration'] for a in ds.raw.annotations
@@ -268,10 +275,16 @@ def _create_windows_from_events(
     ])
 
     stops = onsets + (filtered_durations * ds.raw.info['sfreq']).astype(int)
+    
+    print('stops:', stops)
+    
     # XXX This could probably be simplified by using chunk_duration in
     #     `events_from_annotations`
-
+    print('ds.raw.first_samp ', ds.raw.first_samp)
     last_samp = ds.raw.first_samp + ds.raw.n_times
+    
+    print('last_samp ', last_samp)
+    
     if stops[-1] + trial_stop_offset_samples > last_samp:
         raise ValueError(
             '"trial_stop_offset_samples" too large. Stop of last trial '
@@ -301,19 +314,28 @@ def _create_windows_from_events(
     if not use_mne_epochs:
         onsets = onsets - ds.raw.first_samp
         stops = stops - ds.raw.first_samp
-    i_trials, i_window_in_trials, starts, stops = _compute_window_inds(
-        onsets, stops, trial_start_offset_samples,
-        trial_stop_offset_samples, window_size_samples,
-        window_stride_samples, drop_last_window, accepted_bads_ratio)
-
+        i_trials, i_window_in_trials, starts, stops = _compute_window_inds(
+                                                        onsets, stops, trial_start_offset_samples,
+                                                        trial_stop_offset_samples, window_size_samples,
+                                                        window_stride_samples, drop_last_window, accepted_bads_ratio)
+        
+    print('i_trials ', i_trials)
+    print('i_window_in_trials ', i_window_in_trials)
+    print('starts ', starts)
+    print('stops ', stops)
+    
+    
     if any(np.diff(starts) <= 0):
         raise NotImplementedError('Trial overlap not implemented.')
 
     events = [[start, window_size_samples, description[i_trials[i_start]]]
               for i_start, start in enumerate(starts)]
     events = np.array(events)
-
-    description = events[:, -1]
+    
+    if events.any(): # if list is not empty
+        description = events[:, -1]
+    else: 
+        description = 'No events in this recording'
 
     metadata = pd.DataFrame({
         'i_window_in_trial': i_window_in_trials,
@@ -531,9 +553,18 @@ def _compute_window_inds(
 
     starts += start_offset
     stops += stop_offset
+    
+    print()
+    print('starts ', starts)
+    print('stops ', stops)
+
+
+    # if window size is larger than the event
     if any(size > (stops-starts)):
+        
         bads_mask = size > (stops-starts)
-        min_duration = (stops-starts).min()
+        print('bads_mask', bads_mask)
+        min_duration = (stops-starts)
         if sum(bads_mask) <= accepted_bads_ratio * len(starts):
             starts = starts[np.logical_not(bads_mask)]
             stops = stops[np.logical_not(bads_mask)]
@@ -548,6 +579,10 @@ def _compute_window_inds(
                              f'accepted_bads_ratio to at least {current_ratio}'
                              'and restart training to be able to continue.')
 
+    print()
+    print('starts ', starts)
+    print('stops ', stops)
+    
     i_window_in_trials, i_trials, window_starts = [], [], []
     for start_i, (start, stop) in enumerate(zip(starts, stops)):
         # Generate possible window starts with given stride between original
@@ -640,3 +675,4 @@ def _get_windowing_kwargs(windowing_func_locals):
     input_kwargs.pop('ds')
     windowing_kwargs = {k: v for k, v in input_kwargs.items()}
     return windowing_kwargs
+

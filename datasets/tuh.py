@@ -76,8 +76,7 @@ class TUH(BaseConcatDataset):
     """
     def __init__(self, path, recording_ids=None, target_name=None,
                  preload=False, n_jobs=1, debug=False, remove_unknown_channels=False, set_bipolar_tcp=False):
-               
-        
+            
         # create an index of all files and gather easily accessible info
         # without actually touching the files
         file_paths = glob.glob(os.path.join(path, '**/*.edf'), recursive=True)
@@ -85,7 +84,7 @@ class TUH(BaseConcatDataset):
         # the first 100 file_paths
         if (debug and len(file_paths)>100):
             file_paths = file_paths[0:100]
-            
+        
         descriptions = _create_description(file_paths)
         # sort the descriptions chronologicaly
         descriptions = _sort_chronologically(descriptions)
@@ -311,7 +310,7 @@ def _parse_description_from_file_path(file_path):
     file_path = os.path.normpath(file_path)
     tokens = file_path.split(os.sep)
     # Extract version number and tuh_eeg_abnormal/tuh_eeg from file path
-    if ('train' in tokens) or ('eval' in tokens):  # tuh_eeg_abnormal
+    if ('tuh_eeg_abnormal' in tokens): #
         abnormal = True
         # Tokens[-2] is channel configuration (always 01_tcp_ar in abnormal)
         # on new versions, or session (e.g. s004_2013_08_15) on old versions
@@ -319,7 +318,7 @@ def _parse_description_from_file_path(file_path):
             version = tokens[-9]  # Before dec 2022 updata
         else:
             version = tokens[-6]  # After the dec 2022 update
-
+        
     else:  # tuh_eeg or tuh_eeg_sz
         abnormal = False
         version = tokens[-7]
@@ -331,6 +330,8 @@ def _parse_description_from_file_path(file_path):
         # tuh_eeg/v2.0.0/edf/000/aaaaaaaa/s001_2015_12_30/01_tcp_ar/aaaaaaaa_s001_t000.edf
         # or for abnormal:
         # tuh_eeg_abnormal/v3.0.0/edf/train/normal/01_tcp_ar/aaaaaaav_s004_t000.edf
+        # or for seizure: 
+        # tuh_eeg_seizure/v2.0.0/dev/aaaaaajy/s001_2003_07_16/02_tcp_le/aaaaaajy_s001_t000.edf
         subject_id = tokens[-1].split('_')[0]
         session = tokens[-1].split('_')[1]
         segment = tokens[-1].split('_')[2].split('.')[0]
@@ -348,6 +349,7 @@ def _parse_description_from_file_path(file_path):
             description['year'] = int(year)
             description['month'] = int(month)
             description['day'] = int(day)
+
         return description
     else:        
         warnings.warn('The version of the tuh dataset is too old, please update it for data loading to work')

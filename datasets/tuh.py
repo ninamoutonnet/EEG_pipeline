@@ -115,7 +115,7 @@ class TUH(BaseConcatDataset):
 
         # parse age and gender information from EDF header
         age, gender = _parse_age_and_gender_from_edf_header(file_path)
-        raw = mne.io.read_raw_edf(file_path, preload=preload)
+        raw = mne.io.read_raw_edf(file_path, preload=preload, verbose='WARNING')
         
         # If remove_unknown_channels is set to True, remove the 'bad' channels at this step
         if remove_unknown_channels:

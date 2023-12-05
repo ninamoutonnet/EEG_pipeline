@@ -128,9 +128,14 @@ class TUH(BaseConcatDataset):
         # if using TUSZ, extract the annotations here and add them to the raw files 
         # probably more efficient than doing it in the TUSZ class
         tokens = file_path.split(os.sep) 
+        recording_type_TERM = 'background' 
+
         if ('tuh_eeg_seizure') in tokens:
             annotation_csvbi = _parse_term_based_annotations_from_csv_bi_file(file_path)
-            
+            for annotation in annotation_csvbi:
+                if 'seiz' in annotation['description']:
+                    recording_type_TERM = 'seizure'
+                    
             # annotation_csv does not work if the ch_names do not match the raw file channels
             # so it needs to have a tcp re-reference the raw file 
             if set_bipolar_tcp: 
@@ -142,19 +147,21 @@ class TUH(BaseConcatDataset):
                 raw = raw.set_annotations(annotations, on_missing='warn')
             else:
                 raw = raw.set_annotations(annotation_csvbi, on_missing='warn')
-
+            
+            
+            
         meas_date = datetime(1, 1, 1, tzinfo=timezone.utc) \
             if raw.info['meas_date'] is None else raw.info['meas_date']
         # if this is old version of the data and the year could be parsed from
         # file paths, use this instead as before
         if 'year' in description:
-            meas_date = meas_date.replace(
-                *description[['year', 'month', 'day']])
+            meas_date = meas_date.replace(*description[['year', 'month', 'day']])
         raw.set_meas_date(meas_date)
 
         d = {
             'age': int(age),
             'gender': gender,
+            'pathological': recording_type_TERM
         }
         # if year exists in description = old version
         # if not, get it from meas_date in raw.info and add to description
@@ -163,8 +170,7 @@ class TUH(BaseConcatDataset):
             d['year'] = raw.info['meas_date'].year
             d['month'] = raw.info['meas_date'].month
             d['day'] = raw.info['meas_date'].day
-
-        
+            
         additional_description = pd.Series(d)
         description = pd.concat([description, additional_description])
         base_dataset = BaseDataset(raw, description,

@@ -96,9 +96,12 @@ def _create_fixed_length_windows(
     
     #check that the window size does not exceed the data duration
     length = np.array(ds.raw.n_times)
-    if (window_size_samples is not None) and (window_size_samples > length):
-        raise ValueError(f'Window size {window_size_samples} exceeds the '
-                         f'duration {window_size_seconds} (sec) of the segment, samp_freq: {sfreq}.')        
+    try:
+        if (window_size_samples is not None) and (window_size_samples > (length-start_offset_samples-stop_offset_samples)):
+            raise ValueError(f'Window size {window_size_samples} exceeds the '
+                             f'duration {window_size_seconds} (sec) of the segment including the offsets, samp_freq: {sfreq}.')    
+    except: 
+        return []
     
     # check that the sample size and offsets make sense
     _check_windowing_arguments(
@@ -135,20 +138,12 @@ def _create_fixed_length_windows(
     i_window_in_trial = np.arange(len(starts))
     i_start_in_trial = starts
     i_stop_in_trial = starts + window_size_samples
-    
-
     # Take the raw trace and crop it using the indices computes above. 
     # for every smaller segment, create a Base dataset, keep the description, transform and target_name the same, 
     list_of_ds = []
     time_start_in_trial = i_start_in_trial / sfreq
     time_stop_in_trial = i_stop_in_trial / sfreq
-    
-    #print(sfreq)
-    #print(time_start_in_trial)
-    #print()
-    #print(time_stop_in_trial)
-    #print()
-    
+   
     for i in range(len(starts)): 
         ds_copy = ds.raw.copy()
         additional_description = {'start time in the original edf file': time_start_in_trial[i], 
@@ -156,13 +151,9 @@ def _create_fixed_length_windows(
         raw = ds_copy.crop(tmin=time_start_in_trial[i], tmax=time_stop_in_trial[i], include_tmax=False)
 
         # remove annotations pertaining to bckg activity
-        temp = []
-        if (len(raw.annotations)!=0) and (remove_background_annotations is True):
-            for i in range(len(raw.annotations)):   
-                if 'bckg' in raw.annotations[i]['description']:
-                    temp.append(i)
-            raw.annotations.delete(temp)
-
+        if remove_background_annotations:
+            raw = _screen_annotations_based_on_description(raw, 'bckg')
+        
         list_of_ds.append(BaseDataset(raw = raw,
                                       description = pd.concat([ds.description, pd.Series(additional_description)]), 
                                       transform = ds.transform, 
@@ -173,554 +164,62 @@ def _create_fixed_length_windows(
 
 
 
+def _screen_annotations_based_on_description(edf_raw, keyword_to_remove):
+    #remove any non-term based annotations from the ds. 
+    temp = []
+    if (len(edf_raw.annotations)!=0):
+        for i in range(len(edf_raw.annotations)):   
+            if keyword_to_remove in edf_raw.annotations[i]['description']:
+                temp.append(i)
+        edf_raw.annotations.delete(temp)
+    return edf_raw
 
 
 
 
 
-''' 
-
-# XXX it's called concat_ds...
-def create_windows_from_events(
-        concat_ds, trial_start_offset_samples=0, trial_stop_offset_samples=0,
-        window_size_samples=None, window_stride_samples=None,
-        drop_last_window=False, mapping=None, preload=False,
-        drop_bad_windows=None, picks=None, reject=None, flat=None,
-        on_missing='error', accepted_bads_ratio=0.0, n_jobs=1, verbose='error'):
-    
-    """Create windows based on events in mne.Raw.
-
-    This function extracts windows of size window_size_samples in the interval
-    [trial onset + trial_start_offset_samples, trial onset + trial duration +
-    trial_stop_offset_samples] around each trial, with a separation of
-    window_stride_samples between consecutive windows. If the last window
-    around an event does not end at trial_stop_offset_samples and
-    drop_last_window is set to False, an additional overlapping window that
-    ends at trial_stop_offset_samples is created.
-
-    Windows are extracted from the interval defined by the following::
-
-                                                trial onset +
-                        trial onset                duration
-        |--------------------|------------------------|-----------------------|
-        trial onset -                                             trial onset +
-        trial_start_offset_samples                                   duration +
-                                                    trial_stop_offset_samples
-
-    Parameters
-    ----------
-    concat_ds: BaseConcatDataset
-        A concat of base datasets each holding raw and description.
-    trial_start_offset_samples: int
-        Start offset from original trial onsets, in samples. Defaults to zero.
-    trial_stop_offset_samples: int
-        Stop offset from original trial stop, in samples. Defaults to zero.
-    window_size_samples: int | None
-        Window size. If None, the window size is inferred from the original
-        trial size of the first trial and trial_start_offset_samples and
-        trial_stop_offset_samples.
-    window_stride_samples: int | None
-        Stride between windows, in samples. If None, the window stride is
-        inferred from the original trial size of the first trial and
-        trial_start_offset_samples and trial_stop_offset_samples.
-    drop_last_window: bool
-        If False, an additional overlapping window that ends at
-        trial_stop_offset_samples will be extracted around each event when the
-        last window does not end exactly at trial_stop_offset_samples.
-    mapping: dict(str: int)
-        Mapping from event description to numerical target value.
-    preload: bool
-        If True, preload the data of the Epochs objects. This is useful to
-        reduce disk reading overhead when returning windows in a training
-        scenario, however very large data might not fit into memory.
-    drop_bad_windows: bool
-        If True, call `.drop_bad()` on the resulting mne.Epochs object. This
-        step allows identifying e.g., windows that fall outside of the
-        continuous recording. It is suggested to run this step here as otherwise
-        the BaseConcatDataset has to be updated as well.
-    picks: str | list | slice | None
-        Channels to include. If None, all available channels are used. See
-        mne.Epochs.
-    reject: dict | None
-        Epoch rejection parameters based on peak-to-peak amplitude. If None, no
-        rejection is done based on peak-to-peak amplitude. See mne.Epochs.
-    flat: dict | None
-        Epoch rejection parameters based on flatness of signals. If None, no
-        rejection based on flatness is done. See mne.Epochs.
-    on_missing: str
-        What to do if one or several event ids are not found in the recording.
-        Valid keys are ‘error’ | ‘warning’ | ‘ignore’. See mne.Epochs.
-    accepted_bads_ratio: float, optional
-        Acceptable proportion of trials with inconsistent length in a raw. If
-        the number of trials whose length is exceeded by the window size is
-        smaller than this, then only the corresponding trials are dropped, but
-        the computation continues. Otherwise, an error is raised. Defaults to
-        0.0 (raise an error).
-    n_jobs: int
-        Number of jobs to use to parallelize the windowing.
-    verbose: bool | str | int | None
-        Control verbosity of the logging output when calling mne.Epochs.
-
-    Returns
-    -------
-    windows_datasets: BaseConcatDataset
-        Concatenated datasets of WindowsDataset containing the extracted windows.
-    """
-    _check_windowing_arguments(
-        trial_start_offset_samples, trial_stop_offset_samples,
-        window_size_samples, window_stride_samples)
-
-    # If user did not specify mapping, we extract all events from all datasets
-    # and map them to increasing integers starting from 0
-    infer_mapping = mapping is None
-    mapping = dict() if infer_mapping else mapping
-    infer_window_size_stride = window_size_samples is None
-
-    if drop_bad_windows is not None:
-        warnings.warn('Drop bad windows only has an effect if mne epochs are created, '
-                      'and this argument may be removed in the future.')
-
-    use_mne_epochs = (reject is not None) or (picks is not None) or (flat is not None) or (
-        drop_bad_windows is True)
-    if use_mne_epochs:
-        warnings.warn('Using reject or picks or flat or dropping bad windows means '
-                      'mne Epochs are created, '
-                      'which will be substantially slower and may be deprecated in the future.')
-        if drop_bad_windows is None:
-            drop_bad_windows = True
-
-    list_of_windows_ds = Parallel(n_jobs=n_jobs)(
-        delayed(_create_windows_from_events)(
-            ds, infer_mapping, infer_window_size_stride,
-            trial_start_offset_samples, trial_stop_offset_samples,
-            window_size_samples, window_stride_samples, drop_last_window,
-            mapping, preload, drop_bad_windows, picks, reject, flat,
-            on_missing, accepted_bads_ratio, verbose, use_mne_epochs) for ds in concat_ds.datasets)
-    return BaseConcatDataset(list_of_windows_ds)
-
-
-def create_fixed_length_windows(
-        concat_ds, start_offset_samples=0, stop_offset_samples=None,
-        window_size_samples=None, window_stride_samples=None, drop_last_window=None,
-        mapping=None, preload=False, picks=None,
-        reject=None, flat=None, targets_from='metadata', last_target_only=True,
-        on_missing='error', n_jobs=1, verbose='error'):
-    """Windower that creates sliding windows.
-
-    Parameters
-    ----------
-    concat_ds: ConcatDataset
-        A concat of base datasets each holding raw and description.
-    start_offset_samples: int
-        Start offset from beginning of recording in samples.
-    stop_offset_samples: int | None
-        Stop offset from beginning of recording in samples. If None, set to be
-        the end of the recording.
-    window_size_samples: int | None
-        Window size in samples. If None, set to be the maximum possible window size, ie length of
-        the recording, once offsets are accounted for.
-    window_stride_samples: int | None
-        Stride between windows in samples. If None, set to be equal to winddow_size_samples, so
-        windows will not overlap.
-    drop_last_window: bool | None
-        Whether or not have a last overlapping window, when windows do not
-        equally divide the continuous signal. Must be set to a bool if window size and stride are
-        not None.
-    mapping: dict(str: int)
-        Mapping from event description to target value.
-    preload: bool
-        If True, preload the data of the Epochs objects.
-    picks: str | list | slice | None
-        Channels to include. If None, all available channels are used. See
-        mne.Epochs.
-    reject: dict | None
-        Epoch rejection parameters based on peak-to-peak amplitude. If None, no
-        rejection is done based on peak-to-peak amplitude. See mne.Epochs.
-    flat: dict | None
-        Epoch rejection parameters based on flatness of signals. If None, no
-        rejection based on flatness is done. See mne.Epochs.
-    on_missing: str
-        What to do if one or several event ids are not found in the recording.
-        Valid keys are ‘error’ | ‘warning’ | ‘ignore’. See mne.Epochs.
-    n_jobs: int
-        Number of jobs to use to parallelize the windowing.
-    verbose: bool | str | int | None
-        Control verbosity of the logging output when calling mne.Epochs.
-
-    Returns
-    -------
-    windows_datasets: BaseConcatDataset
-        Concatenated datasets of WindowsDataset containing the extracted windows.
-    """
-    stop_offset_samples, drop_last_window = _check_and_set_fixed_length_window_arguments(
-        start_offset_samples, stop_offset_samples, window_size_samples, window_stride_samples,
-        drop_last_window)
-
-    # check if recordings are of different lengths -> they are, this does not check for different length (Nina's comment)
-    lengths = np.array([ds.raw.n_times for ds in concat_ds.datasets])
-    if (np.diff(lengths) != 0).any() and window_size_samples is None:
-        warnings.warn('Recordings have different lengths, they will not be batch-able!')
-    if (window_size_samples is not None) and any(window_size_samples > lengths):
-        raise ValueError(f'Window size {window_size_samples} exceeds trial '
-                         f'duration {lengths.min()}.')
-
-    list_of_windows_ds = Parallel(n_jobs=n_jobs)(
-        delayed(_create_fixed_length_windows)(
-            ds, start_offset_samples, stop_offset_samples, window_size_samples,
-            window_stride_samples, drop_last_window, mapping, preload,
-            picks, reject, flat, targets_from, last_target_only,
-            on_missing, verbose) for ds in concat_ds.datasets)
-    return BaseConcatDataset(list_of_windows_ds)
-
-
-def _create_windows_from_events(
-        ds, infer_mapping, infer_window_size_stride,
-        trial_start_offset_samples, trial_stop_offset_samples,
-        window_size_samples=None, window_stride_samples=None,
-        drop_last_window=False, mapping=None, preload=False,
-        drop_bad_windows=True, picks=None, reject=None, flat=None,
-        on_missing='error', accepted_bads_ratio=0.0, verbose='error',
-        use_mne_epochs=False):
-    """Create WindowsDataset from BaseDataset based on events.
-
-    Parameters
-    ----------
-    ds : BaseDataset
-        Dataset containing continuous data and description.
-    infer_mapping : bool
-        If True, extract all events from all datasets and map them to
-        increasing integers starting from 0.
-    infer_window_size_stride : bool
-        If True, infer the stride from the original trial size of the first
-        trial and trial_start_offset_samples and trial_stop_offset_samples.
-
-    See `create_windows_from_events` for description of other parameters.
-
-    Returns
-    -------
-    EEGWindowsDataset :
-        Windowed dataset.
-    """
-    # catch window_kwargs to store to dataset
-    window_kwargs = [
-        (create_windows_from_events.__name__, _get_windowing_kwargs(locals())),
-    ]
-    if infer_mapping:
-        unique_events = np.unique(ds.raw.annotations.description)
-        #Note that all files seem to have a term based label, usually bckg if there are no seizures. Right now, I can filter 
-        # out event based labels because there is at least one term based label per reco. if I try to filter to only have the 
-        # seiz,1.0,TERM labels, it shows an error because  mne.events_from_annotations(ds.raw, mapping, verbose='WARNING') cannot find the 
-        # label 
-        new_unique_events = [x for x in unique_events if ((x not in mapping) and ('TERM' in x) )] #and ('seiz' in x))] 
-        # this limits the mapping to only include Term base event 
-        # mapping event descriptions to integers from 0 on
-        max_id_existing_mapping = len(mapping)
-        mapping.update({
-                event_name: i_event_type + max_id_existing_mapping
-                for i_event_type, event_name in enumerate(new_unique_events)
-        })
-    
-    #print(mapping)
-    
-    events, events_id = mne.events_from_annotations(ds.raw, mapping, verbose='WARNING')
-    onsets = events[:, 0]
-    
-    print('events: ', events)
-    print('event_id', events_id)
-    
-    # Onsets are relative to the beginning of the recording
-    filtered_durations = np.array([
-        a['duration'] for a in ds.raw.annotations
-        if a['description'] in events_id
-    ])
-
-    stops = onsets + (filtered_durations * ds.raw.info['sfreq']).astype(int)
-    
-    #print('stops:', stops)
-    
-    # XXX This could probably be simplified by using chunk_duration in
-    #     `events_from_annotations`
-    #print('ds.raw.first_samp ', ds.raw.first_samp)
-    last_samp = ds.raw.first_samp + ds.raw.n_times
-    
-    #print('last_samp ', last_samp)
-    
-    if stops[-1] + trial_stop_offset_samples > last_samp:
-        raise ValueError(
-            '"trial_stop_offset_samples" too large. Stop of last trial '
-            f'({stops[-1]}) + "trial_stop_offset_samples" '
-            f'({trial_stop_offset_samples}) must be smaller than length of'
-            f' recording ({len(ds)}).')
-
-    if infer_window_size_stride:
-        # window size is trial size
-        if window_size_samples is None:
-            window_size_samples = stops[0] + trial_stop_offset_samples - (
-                onsets[0] + trial_start_offset_samples)
-            window_stride_samples = window_size_samples
-        this_trial_sizes = (stops + trial_stop_offset_samples) - (
-            onsets + trial_start_offset_samples)
-        # Maybe actually this is not necessary?
-        # We could also just say we just assume window size=trial size
-        # in case not given, without this condition...
-        # but then would have to change functions overall
-        # to deal with varying window sizes hmmhmh
-        assert np.all(this_trial_sizes == window_size_samples), (
-            'All trial sizes should be the same if you do not supply a window '
-            'size.')
-
-    description = events[:, -1]
-
-    if not use_mne_epochs:
-        onsets = onsets - ds.raw.first_samp
-        stops = stops - ds.raw.first_samp
-        i_trials, i_window_in_trials, starts, stops = _compute_window_inds(
-                                                        onsets, stops, trial_start_offset_samples,
-                                                        trial_stop_offset_samples, window_size_samples,
-                                                        window_stride_samples, drop_last_window, accepted_bads_ratio)
-        
-    #print('i_trials ', i_trials)
-    #print('i_window_in_trials ', i_window_in_trials)
-    #print('starts ', starts)
-    #print('stops ', stops)
-    
-    
-    if any(np.diff(starts) <= 0):
-        raise NotImplementedError('Trial overlap not implemented.')
-
-    events = [[start, window_size_samples, description[i_trials[i_start]]]
-              for i_start, start in enumerate(starts)]
-    events = np.array(events)
-    
-    if events.any(): # if list is not empty
-        description = events[:, -1]
-    else: 
-        description = 'No events in this recording'
-
-    metadata = pd.DataFrame({
-        'i_window_in_trial': i_window_in_trials,
-        'i_start_in_trial': starts,
-        'i_stop_in_trial': stops,
-        'target': description
-    })
-    if use_mne_epochs:
-        # window size - 1, since tmax is inclusive
-        mne_epochs = mne.Epochs(
-            ds.raw, events, events_id, baseline=None, tmin=0,
-            tmax=(window_size_samples - 1) / ds.raw.info['sfreq'],
-            metadata=metadata, preload=preload, picks=picks, reject=reject,
-            flat=flat, on_missing=on_missing, verbose=verbose)
-        if drop_bad_windows:
-            mne_epochs.drop_bad()
-        windows_ds = WindowsDataset(mne_epochs, ds.description,)
-    else:
-        windows_ds = EEGWindowsDataset(
-            ds.raw, metadata=metadata, description=ds.description,)
-    # add window_kwargs and raw_preproc_kwargs to windows dataset
-    setattr(windows_ds, 'window_kwargs', window_kwargs)
-    kwargs_name = 'raw_preproc_kwargs'
-    if hasattr(ds, kwargs_name):
-        setattr(windows_ds, kwargs_name, getattr(ds, kwargs_name))
-        
-    print()
-    return windows_ds
 
 
 
 
-def _compute_window_inds(
-        starts, stops, start_offset, stop_offset, size, stride,
-        drop_last_window, accepted_bads_ratio):
-    """Compute window start and stop indices.
-
-    Create window starts from trial onsets (shifted by start_offset) to trial
-    end (shifted by stop_offset) separated by stride, as long as window size
-    fits into trial.
-
-    Parameters
-    ----------
-    starts: array-like
-        Trial starts in samples.
-    stops: array-like
-        Trial stops in samples.
-    start_offset: int
-        Start offset from original trial onsets in samples.
-    stop_offset: int
-        Stop offset from original trial stop in samples.
-    size: int
-        Window size.
-    stride: int
-        Stride between windows.
-    drop_last_window: bool
-        Toggles of shifting last window within range or dropping last samples.
-    accepted_bads_ratio: float
-        Acceptable proportion of bad trials within a raw. If the number of
-        trials whose length is exceeded by the window size is smaller than
-        this, then only the corresponding trials are dropped, but the
-        computation continues. Otherwise, an error is raised.
-
-    Returns
-    -------
-    result_lists: (list, list, list, list)
-        Trial, i_window_in_trial, start sample and stop sample of windows.
-    """
-    starts = np.array([starts]) if isinstance(starts, int) else starts
-    stops = np.array([stops]) if isinstance(stops, int) else stops
-
-    starts += start_offset
-    stops += stop_offset
-    
-    #print()
-    #print('starts ', starts)
-    #print('stops ', stops)
-
-
-    # if window size is larger than the event
-    if any(size > (stops-starts)):
-        
-        bads_mask = size > (stops-starts)
-        print('bads_mask', bads_mask)
-        min_duration = (stops-starts)
-        if sum(bads_mask) <= accepted_bads_ratio * len(starts):
-            starts = starts[np.logical_not(bads_mask)]
-            stops = stops[np.logical_not(bads_mask)]
-            warnings.warn(
-                f'Trials {np.where(bads_mask)[0]} are being dropped as the '
-                f'window size ({size}) exceeds their duration {min_duration}.')
-        else:
-            current_ratio = sum(bads_mask) / len(starts)
-            raise ValueError(f'Window size {size} exceeds trial duration '
-                             f'({min_duration}) for too many trials '
-                             f'({current_ratio * 100}%). Set '
-                             f'accepted_bads_ratio to at least {current_ratio}'
-                             'and restart training to be able to continue.')
-
-    
-    #print()
-    #print('starts ', starts)
-    #print('stops ', stops)
-    
-    i_window_in_trials, i_trials, window_starts = [], [], []
-    for start_i, (start, stop) in enumerate(zip(starts, stops)):
-        # Generate possible window starts with given stride between original
-        # trial onsets (shifted by start_offset) and stops
-        possible_starts = np.arange(start, stop, stride)
-
-        # Possible window start is actually a start, if window size fits in
-        # trial start and stop
-        for i_window, s in enumerate(possible_starts):
-            if (s + size) <= stop:
-                window_starts.append(s)
-                i_window_in_trials.append(i_window)
-                i_trials.append(start_i)
-
-        # If the last window start + window size is not the same as
-        # stop + stop_offset, create another window that overlaps and stops
-        # at onset + stop_offset
-        if not drop_last_window:
-            if window_starts[-1] + size != stop:
-                window_starts.append(stop - size)
-                i_window_in_trials.append(i_window_in_trials[-1] + 1)
-                i_trials.append(start_i)
-
-    # Update stops to now be event stops instead of trial stops
-    window_stops = np.array(window_starts) + size
-    if not (len(i_window_in_trials) == len(window_starts) == len(window_stops)):
-        raise ValueError(f'{len(i_window_in_trials)} == '
-                         f'{len(window_starts)} == {len(window_stops)}')
-
-    return i_trials, i_window_in_trials, window_starts, window_stops
 
 
 
 
-def _get_windowing_kwargs(windowing_func_locals):
-    input_kwargs = windowing_func_locals
-    input_kwargs.pop('ds')
-    windowing_kwargs = {k: v for k, v in input_kwargs.items()}
-    return windowing_kwargs
-'''"""Get epochs from mne.Raw
-"""
-
-# Authors: Hubert Banville <hubert.jbanville@gmail.com>
-#          Lukas Gemein <l.gemein@gmail.com>
-#          Simon Brandt <simonbrandt@protonmail.com>
-#          David Sabbagh <dav.sabbagh@gmail.com>
-#          Henrik Bonsmann <henrikbons@gmail.com>
-#          Ann-Kathrin Kiessner <ann-kathrin.kiessner@gmx.de>
-#          Vytautas Jankauskas <vytauto.jankausko@gmail.com>
-#          Dan Wilson <dan.c.wil@gmail.com>
-#          Maciej Sliwowski <maciek.sliwowski@gmail.com>
-#          Mohammed Fattouh <mo.fattouh@gmail.com>
-#          Robin Schirrmeister <robintibor@gmail.com>
-#
-# License: BSD (3-clause)
-
-## Nind heavily edited
-
-import warnings
-
-import numpy as np
-import mne
-import pandas as pd
-from joblib import Parallel, delayed
-from itertools import chain
-
-# from datasets.base import WindowsDataset, BaseConcatDataset, EEGWindowsDataset
-
-from datasets.base import BaseConcatDataset, BaseDataset
 
 
 
-def create_fixed_length_window_Nina( 
+
+
+
+
+
+
+
+
+
+
+
+
+def create_window_from_TERM_annotations( 
         concat_ds, start_offset_seconds=0, stop_offset_seconds=None,
         window_size_seconds=None, window_stride_seconds=None, 
         mapping=None, preload=False, picks=None,
         reject=None, flat=None, targets_from='metadata', last_target_only=True,
         on_missing='error', n_jobs=1, verbose='error', remove_background_annotations=False):
     
-     
-
-    # fetch the recordings different lengths
-    lengths = np.array([ds.raw.n_times for ds in concat_ds.datasets])
-    if (np.diff(lengths) != 0).any() and window_size_seconds is None:
-        # if the recordings have different lengths in samples, which they do
-        warnings.warn('Recordings have different lengths, they will not be batch-able!')
-        
     list_of_base_ds = Parallel(n_jobs=n_jobs)(
-        delayed(_create_fixed_length_windows)(
+        delayed(_create_window_from_TERM_annotations)(
             ds, start_offset_seconds, stop_offset_seconds, window_size_seconds,
             window_stride_seconds, mapping, preload,
             picks, reject, flat, targets_from, last_target_only,
             on_missing, verbose, remove_background_annotations) for ds in concat_ds.datasets)
+    
     return list(chain.from_iterable(BaseConcatDataset(list_of_base_ds).datasets))
 
 
 
-
-def _check_windowing_arguments(
-        trial_start_offset_samples, trial_stop_offset_samples,
-        window_size_samples, window_stride_samples):
-    
-    # check the validity of input arguments, ie, they are not floats or you don't have a stride without a window size
-    assert isinstance(trial_start_offset_samples, (int, np.integer))
-    assert isinstance(trial_stop_offset_samples, (int, np.integer, type(None)))
-    assert isinstance(window_size_samples, (int, np.integer, type(None)))
-    assert isinstance(window_stride_samples, (int, np.integer, type(None)))
-    
-    assert (window_size_samples is None) == (window_stride_samples is None)
-    
-    # if you specify a size, it has to be greater than 0 and you have to have a stride >0 too 
-    if window_size_samples is not None:
-        assert window_size_samples > 0, (
-            "window size has to be larger than 0")
-        assert window_stride_samples > 0, (
-            "window stride has to be larger than 0")
-
-
-
-
-def _create_fixed_length_windows(
+def _create_window_from_TERM_annotations(
         ds, start_offset_seconds, stop_offset_seconds, window_size_seconds,
         window_stride_seconds, mapping=None, preload=False,
         picks=None, reject=None, flat=None, targets_from='metadata',
@@ -737,78 +236,108 @@ def _create_fixed_length_windows(
     
     #check that the window size does not exceed the data duration
     length = np.array(ds.raw.n_times)
-    if (window_size_samples is not None) and (window_size_samples > length):
-        raise ValueError(f'Window size {window_size_samples} exceeds the '
-                         f'duration {window_size_seconds} (sec) of the segment, samp_freq: {sfreq}.')        
-    
+    length_seconds = ds.raw.n_times / sfreq
+    try:
+        if (window_size_samples is not None) and (window_size_samples > (length-start_offset_samples-stop_offset_samples)):
+            raise ValueError(f'Window size {window_size_samples} exceeds the '
+                             f'duration {window_size_seconds} (sec) of the segment including the offsets, samp_freq: {sfreq}.')  
+    except: 
+        return []
+
     # check that the sample size and offsets make sense
     _check_windowing_arguments(
         start_offset_samples, stop_offset_samples,
         window_size_samples, window_stride_samples)
+
+    # remove annotations pertaining to EVENT based activity
+    ds.raw = _screen_annotations_based_on_description(ds.raw, 'EVENT')
     
-    # stop is the end sample 
-    stop = ds.raw.n_times if stop_offset_samples is None else (ds.raw.n_times - stop_offset_samples)
-
-    # assume window should be whole recording
-    if window_size_samples is None:
-        window_size_samples = stop - start_offset_samples
-    # default stride is 0 overlap
-    if window_stride_samples is None:
-        window_stride_samples = window_size_samples
-
-    last_potential_start = stop - window_size_samples
-
-    # already includes last incomplete window start
-    starts = np.arange(start_offset_samples, last_potential_start + 1, window_stride_samples)
-
-
-    # get targets from dataset description if they exist
-    target = -1 if ds.target_name is None else ds.description[ds.target_name]
-    if mapping is not None:
-        # in case of multiple targets
-        if isinstance(target, pd.Series):
-            target = target.replace(mapping).to_list()
-        # in case of single value target
-        else:
-            target = mapping[target]
-
-    
-    i_window_in_trial = np.arange(len(starts))
-    i_start_in_trial = starts
-    i_stop_in_trial = starts + window_size_samples
-    
-
-    # Take the raw trace and crop it using the indices computes above. 
-    # for every smaller segment, create a Base dataset, keep the description, transform and target_name the same, 
+    # If it is a segment containing no seizure activity at all -> i.e both the description pathological session (TERM label)            
+    # and pathological session (EVENT labels) == False -> the. just segment the data similarly to create_fixed_length_window
     list_of_ds = []
-    time_start_in_trial = i_start_in_trial / sfreq
-    time_stop_in_trial = i_stop_in_trial / sfreq
-    
-    #print(sfreq)
-    #print(time_start_in_trial)
-    #print()
-    #print(time_stop_in_trial)
-    #print()
-    
-    for i in range(len(starts)): 
-        ds_copy = ds.raw.copy()
-        additional_description = {'start time in the original edf file': time_start_in_trial[i], 
-                                 'stop time in the original edf file': time_stop_in_trial[i]}
-        raw = ds_copy.crop(tmin=time_start_in_trial[i], tmax=time_stop_in_trial[i], include_tmax=False)
 
-        # remove annotations pertaining to bckg activity
-        temp = []
-        if (len(raw.annotations)!=0) and (remove_background_annotations is True):
-            for i in range(len(raw.annotations)):   
-                if 'bckg' in raw.annotations[i]['description']:
-                    temp.append(i)
-            raw.annotations.delete(temp)
 
-        list_of_ds.append(BaseDataset(raw = raw,
-                                      description = pd.concat([ds.description, pd.Series(additional_description)]), 
-                                      transform = ds.transform, 
-                                      target_name = ds.target_name))
-                         
+    if (not ds.description['pathological session (TERM label)']) and (not ds.description['pathological session (EVENT labels)']):
+        # stop is the end sample 
+        stop = ds.raw.n_times if stop_offset_samples is None else (ds.raw.n_times - stop_offset_samples)
+        # assume window should be whole recording
+        if window_size_samples is None:
+            window_size_samples = stop - start_offset_samples
+        # default stride is 0 overlap
+        if window_stride_samples is None:
+            window_stride_samples = window_size_samples
+        last_potential_start = stop - window_size_samples
+        # already includes last incomplete window start
+        starts = np.arange(start_offset_samples, last_potential_start + 1, window_stride_samples)
+
+
+        # get targets from dataset description if they exist
+        target = -1 if ds.target_name is None else ds.description[ds.target_name]
+        if mapping is not None:
+            # in case of multiple targets
+            if isinstance(target, pd.Series):
+                target = target.replace(mapping).to_list()
+            # in case of single value target
+            else:
+                target = mapping[target]
+
+
+        i_window_in_trial = np.arange(len(starts))
+        i_start_in_trial = starts
+        i_stop_in_trial = starts + window_size_samples
+        # Take the raw trace and crop it using the indices computes above. 
+        # for every smaller segment, create a Base dataset, keep the description, transform and target_name the same, 
+        time_start_in_trial = i_start_in_trial / sfreq
+        time_stop_in_trial = i_stop_in_trial / sfreq
+        
+        for i in range(len(starts)): 
+            ds_copy = ds.raw.copy()
+            additional_description = {'start time in the original edf file': time_start_in_trial[i], 
+                                     'stop time in the original edf file': time_stop_in_trial[i]}
+            raw = ds_copy.crop(tmin=time_start_in_trial[i], tmax=time_stop_in_trial[i], include_tmax=False)
+
+            # remove annotations pertaining to bckg activity
+            if remove_background_annotations:
+                raw = _screen_annotations_based_on_description(raw, 'bckg')
+
+            list_of_ds.append(BaseDataset(raw = raw,
+                                          description = pd.concat([ds.description, pd.Series(additional_description)]), 
+                                          transform = ds.transform, 
+                                          target_name = ds.target_name))
+
+    # If you have TERM seizure in the recording    
+    elif ds.description['pathological session (TERM label)']:
+        #crop the extremities to remove the start and stop offsets: 
+        ds.raw.crop(tmin = start_offset_seconds, tmax = length_seconds-stop_offset_seconds, include_tmax=True)
+        
+        #for all of the rest of the TERM time and SEIZURE annotations, crop the samples.
+        temp =[]
+        #print(ds.raw.info)
+        #print('SECONDS LENGTH', length_seconds)
+        #print('AFTER CROP LENGTH', ds.raw.n_times/ds.raw.info['sfreq'])
+        for i in range(len(ds.raw.annotations)):   
+            if 'seiz' in ds.raw.annotations[i]['description']:
+                temp.append(ds.raw.annotations[i])
+                #print(ds.raw.annotations[i])
+                
+        list_of_raw_term_sz_segments = []                  
+        try :
+            list_of_raw_term_sz_segments = (ds.raw.crop_by_annotations(temp))
+        except:
+            pass
+         
+        for i in range(len(list_of_raw_term_sz_segments)):
+            try:
+                list_of_ds.append(BaseDataset(raw = list_of_raw_term_sz_segments[i], 
+                                              description = ds.description,  
+                                              transform = ds.transform,                                     
+                                              target_name = ds.target_name))
+            except:
+                pass
+        
+        
+        
+
     return list_of_ds
 
 
@@ -819,465 +348,30 @@ def _create_fixed_length_windows(
 
 
 
-''' 
-
-# XXX it's called concat_ds...
-def create_windows_from_events(
-        concat_ds, trial_start_offset_samples=0, trial_stop_offset_samples=0,
-        window_size_samples=None, window_stride_samples=None,
-        drop_last_window=False, mapping=None, preload=False,
-        drop_bad_windows=None, picks=None, reject=None, flat=None,
-        on_missing='error', accepted_bads_ratio=0.0, n_jobs=1, verbose='error'):
-    
-    """Create windows based on events in mne.Raw.
-
-    This function extracts windows of size window_size_samples in the interval
-    [trial onset + trial_start_offset_samples, trial onset + trial duration +
-    trial_stop_offset_samples] around each trial, with a separation of
-    window_stride_samples between consecutive windows. If the last window
-    around an event does not end at trial_stop_offset_samples and
-    drop_last_window is set to False, an additional overlapping window that
-    ends at trial_stop_offset_samples is created.
-
-    Windows are extracted from the interval defined by the following::
-
-                                                trial onset +
-                        trial onset                duration
-        |--------------------|------------------------|-----------------------|
-        trial onset -                                             trial onset +
-        trial_start_offset_samples                                   duration +
-                                                    trial_stop_offset_samples
-
-    Parameters
-    ----------
-    concat_ds: BaseConcatDataset
-        A concat of base datasets each holding raw and description.
-    trial_start_offset_samples: int
-        Start offset from original trial onsets, in samples. Defaults to zero.
-    trial_stop_offset_samples: int
-        Stop offset from original trial stop, in samples. Defaults to zero.
-    window_size_samples: int | None
-        Window size. If None, the window size is inferred from the original
-        trial size of the first trial and trial_start_offset_samples and
-        trial_stop_offset_samples.
-    window_stride_samples: int | None
-        Stride between windows, in samples. If None, the window stride is
-        inferred from the original trial size of the first trial and
-        trial_start_offset_samples and trial_stop_offset_samples.
-    drop_last_window: bool
-        If False, an additional overlapping window that ends at
-        trial_stop_offset_samples will be extracted around each event when the
-        last window does not end exactly at trial_stop_offset_samples.
-    mapping: dict(str: int)
-        Mapping from event description to numerical target value.
-    preload: bool
-        If True, preload the data of the Epochs objects. This is useful to
-        reduce disk reading overhead when returning windows in a training
-        scenario, however very large data might not fit into memory.
-    drop_bad_windows: bool
-        If True, call `.drop_bad()` on the resulting mne.Epochs object. This
-        step allows identifying e.g., windows that fall outside of the
-        continuous recording. It is suggested to run this step here as otherwise
-        the BaseConcatDataset has to be updated as well.
-    picks: str | list | slice | None
-        Channels to include. If None, all available channels are used. See
-        mne.Epochs.
-    reject: dict | None
-        Epoch rejection parameters based on peak-to-peak amplitude. If None, no
-        rejection is done based on peak-to-peak amplitude. See mne.Epochs.
-    flat: dict | None
-        Epoch rejection parameters based on flatness of signals. If None, no
-        rejection based on flatness is done. See mne.Epochs.
-    on_missing: str
-        What to do if one or several event ids are not found in the recording.
-        Valid keys are ‘error’ | ‘warning’ | ‘ignore’. See mne.Epochs.
-    accepted_bads_ratio: float, optional
-        Acceptable proportion of trials with inconsistent length in a raw. If
-        the number of trials whose length is exceeded by the window size is
-        smaller than this, then only the corresponding trials are dropped, but
-        the computation continues. Otherwise, an error is raised. Defaults to
-        0.0 (raise an error).
-    n_jobs: int
-        Number of jobs to use to parallelize the windowing.
-    verbose: bool | str | int | None
-        Control verbosity of the logging output when calling mne.Epochs.
-
-    Returns
-    -------
-    windows_datasets: BaseConcatDataset
-        Concatenated datasets of WindowsDataset containing the extracted windows.
-    """
-    _check_windowing_arguments(
-        trial_start_offset_samples, trial_stop_offset_samples,
-        window_size_samples, window_stride_samples)
-
-    # If user did not specify mapping, we extract all events from all datasets
-    # and map them to increasing integers starting from 0
-    infer_mapping = mapping is None
-    mapping = dict() if infer_mapping else mapping
-    infer_window_size_stride = window_size_samples is None
-
-    if drop_bad_windows is not None:
-        warnings.warn('Drop bad windows only has an effect if mne epochs are created, '
-                      'and this argument may be removed in the future.')
-
-    use_mne_epochs = (reject is not None) or (picks is not None) or (flat is not None) or (
-        drop_bad_windows is True)
-    if use_mne_epochs:
-        warnings.warn('Using reject or picks or flat or dropping bad windows means '
-                      'mne Epochs are created, '
-                      'which will be substantially slower and may be deprecated in the future.')
-        if drop_bad_windows is None:
-            drop_bad_windows = True
-
-    list_of_windows_ds = Parallel(n_jobs=n_jobs)(
-        delayed(_create_windows_from_events)(
-            ds, infer_mapping, infer_window_size_stride,
-            trial_start_offset_samples, trial_stop_offset_samples,
-            window_size_samples, window_stride_samples, drop_last_window,
-            mapping, preload, drop_bad_windows, picks, reject, flat,
-            on_missing, accepted_bads_ratio, verbose, use_mne_epochs) for ds in concat_ds.datasets)
-    return BaseConcatDataset(list_of_windows_ds)
-
-
-def create_fixed_length_windows(
-        concat_ds, start_offset_samples=0, stop_offset_samples=None,
-        window_size_samples=None, window_stride_samples=None, drop_last_window=None,
-        mapping=None, preload=False, picks=None,
-        reject=None, flat=None, targets_from='metadata', last_target_only=True,
-        on_missing='error', n_jobs=1, verbose='error'):
-    """Windower that creates sliding windows.
-
-    Parameters
-    ----------
-    concat_ds: ConcatDataset
-        A concat of base datasets each holding raw and description.
-    start_offset_samples: int
-        Start offset from beginning of recording in samples.
-    stop_offset_samples: int | None
-        Stop offset from beginning of recording in samples. If None, set to be
-        the end of the recording.
-    window_size_samples: int | None
-        Window size in samples. If None, set to be the maximum possible window size, ie length of
-        the recording, once offsets are accounted for.
-    window_stride_samples: int | None
-        Stride between windows in samples. If None, set to be equal to winddow_size_samples, so
-        windows will not overlap.
-    drop_last_window: bool | None
-        Whether or not have a last overlapping window, when windows do not
-        equally divide the continuous signal. Must be set to a bool if window size and stride are
-        not None.
-    mapping: dict(str: int)
-        Mapping from event description to target value.
-    preload: bool
-        If True, preload the data of the Epochs objects.
-    picks: str | list | slice | None
-        Channels to include. If None, all available channels are used. See
-        mne.Epochs.
-    reject: dict | None
-        Epoch rejection parameters based on peak-to-peak amplitude. If None, no
-        rejection is done based on peak-to-peak amplitude. See mne.Epochs.
-    flat: dict | None
-        Epoch rejection parameters based on flatness of signals. If None, no
-        rejection based on flatness is done. See mne.Epochs.
-    on_missing: str
-        What to do if one or several event ids are not found in the recording.
-        Valid keys are ‘error’ | ‘warning’ | ‘ignore’. See mne.Epochs.
-    n_jobs: int
-        Number of jobs to use to parallelize the windowing.
-    verbose: bool | str | int | None
-        Control verbosity of the logging output when calling mne.Epochs.
-
-    Returns
-    -------
-    windows_datasets: BaseConcatDataset
-        Concatenated datasets of WindowsDataset containing the extracted windows.
-    """
-    stop_offset_samples, drop_last_window = _check_and_set_fixed_length_window_arguments(
-        start_offset_samples, stop_offset_samples, window_size_samples, window_stride_samples,
-        drop_last_window)
-
-    # check if recordings are of different lengths -> they are, this does not check for different length (Nina's comment)
-    lengths = np.array([ds.raw.n_times for ds in concat_ds.datasets])
-    if (np.diff(lengths) != 0).any() and window_size_samples is None:
-        warnings.warn('Recordings have different lengths, they will not be batch-able!')
-    if (window_size_samples is not None) and any(window_size_samples > lengths):
-        raise ValueError(f'Window size {window_size_samples} exceeds trial '
-                         f'duration {lengths.min()}.')
-
-    list_of_windows_ds = Parallel(n_jobs=n_jobs)(
-        delayed(_create_fixed_length_windows)(
-            ds, start_offset_samples, stop_offset_samples, window_size_samples,
-            window_stride_samples, drop_last_window, mapping, preload,
-            picks, reject, flat, targets_from, last_target_only,
-            on_missing, verbose) for ds in concat_ds.datasets)
-    return BaseConcatDataset(list_of_windows_ds)
-
-
-def _create_windows_from_events(
-        ds, infer_mapping, infer_window_size_stride,
-        trial_start_offset_samples, trial_stop_offset_samples,
-        window_size_samples=None, window_stride_samples=None,
-        drop_last_window=False, mapping=None, preload=False,
-        drop_bad_windows=True, picks=None, reject=None, flat=None,
-        on_missing='error', accepted_bads_ratio=0.0, verbose='error',
-        use_mne_epochs=False):
-    """Create WindowsDataset from BaseDataset based on events.
-
-    Parameters
-    ----------
-    ds : BaseDataset
-        Dataset containing continuous data and description.
-    infer_mapping : bool
-        If True, extract all events from all datasets and map them to
-        increasing integers starting from 0.
-    infer_window_size_stride : bool
-        If True, infer the stride from the original trial size of the first
-        trial and trial_start_offset_samples and trial_stop_offset_samples.
-
-    See `create_windows_from_events` for description of other parameters.
-
-    Returns
-    -------
-    EEGWindowsDataset :
-        Windowed dataset.
-    """
-    # catch window_kwargs to store to dataset
-    window_kwargs = [
-        (create_windows_from_events.__name__, _get_windowing_kwargs(locals())),
-    ]
-    if infer_mapping:
-        unique_events = np.unique(ds.raw.annotations.description)
-        #Note that all files seem to have a term based label, usually bckg if there are no seizures. Right now, I can filter 
-        # out event based labels because there is at least one term based label per reco. if I try to filter to only have the 
-        # seiz,1.0,TERM labels, it shows an error because  mne.events_from_annotations(ds.raw, mapping, verbose='WARNING') cannot find the 
-        # label 
-        new_unique_events = [x for x in unique_events if ((x not in mapping) and ('TERM' in x) )] #and ('seiz' in x))] 
-        # this limits the mapping to only include Term base event 
-        # mapping event descriptions to integers from 0 on
-        max_id_existing_mapping = len(mapping)
-        mapping.update({
-                event_name: i_event_type + max_id_existing_mapping
-                for i_event_type, event_name in enumerate(new_unique_events)
-        })
-    
-    #print(mapping)
-    
-    events, events_id = mne.events_from_annotations(ds.raw, mapping, verbose='WARNING')
-    onsets = events[:, 0]
-    
-    print('events: ', events)
-    print('event_id', events_id)
-    
-    # Onsets are relative to the beginning of the recording
-    filtered_durations = np.array([
-        a['duration'] for a in ds.raw.annotations
-        if a['description'] in events_id
-    ])
-
-    stops = onsets + (filtered_durations * ds.raw.info['sfreq']).astype(int)
-    
-    #print('stops:', stops)
-    
-    # XXX This could probably be simplified by using chunk_duration in
-    #     `events_from_annotations`
-    #print('ds.raw.first_samp ', ds.raw.first_samp)
-    last_samp = ds.raw.first_samp + ds.raw.n_times
-    
-    #print('last_samp ', last_samp)
-    
-    if stops[-1] + trial_stop_offset_samples > last_samp:
-        raise ValueError(
-            '"trial_stop_offset_samples" too large. Stop of last trial '
-            f'({stops[-1]}) + "trial_stop_offset_samples" '
-            f'({trial_stop_offset_samples}) must be smaller than length of'
-            f' recording ({len(ds)}).')
-
-    if infer_window_size_stride:
-        # window size is trial size
-        if window_size_samples is None:
-            window_size_samples = stops[0] + trial_stop_offset_samples - (
-                onsets[0] + trial_start_offset_samples)
-            window_stride_samples = window_size_samples
-        this_trial_sizes = (stops + trial_stop_offset_samples) - (
-            onsets + trial_start_offset_samples)
-        # Maybe actually this is not necessary?
-        # We could also just say we just assume window size=trial size
-        # in case not given, without this condition...
-        # but then would have to change functions overall
-        # to deal with varying window sizes hmmhmh
-        assert np.all(this_trial_sizes == window_size_samples), (
-            'All trial sizes should be the same if you do not supply a window '
-            'size.')
-
-    description = events[:, -1]
-
-    if not use_mne_epochs:
-        onsets = onsets - ds.raw.first_samp
-        stops = stops - ds.raw.first_samp
-        i_trials, i_window_in_trials, starts, stops = _compute_window_inds(
-                                                        onsets, stops, trial_start_offset_samples,
-                                                        trial_stop_offset_samples, window_size_samples,
-                                                        window_stride_samples, drop_last_window, accepted_bads_ratio)
-        
-    #print('i_trials ', i_trials)
-    #print('i_window_in_trials ', i_window_in_trials)
-    #print('starts ', starts)
-    #print('stops ', stops)
-    
-    
-    if any(np.diff(starts) <= 0):
-        raise NotImplementedError('Trial overlap not implemented.')
-
-    events = [[start, window_size_samples, description[i_trials[i_start]]]
-              for i_start, start in enumerate(starts)]
-    events = np.array(events)
-    
-    if events.any(): # if list is not empty
-        description = events[:, -1]
-    else: 
-        description = 'No events in this recording'
-
-    metadata = pd.DataFrame({
-        'i_window_in_trial': i_window_in_trials,
-        'i_start_in_trial': starts,
-        'i_stop_in_trial': stops,
-        'target': description
-    })
-    if use_mne_epochs:
-        # window size - 1, since tmax is inclusive
-        mne_epochs = mne.Epochs(
-            ds.raw, events, events_id, baseline=None, tmin=0,
-            tmax=(window_size_samples - 1) / ds.raw.info['sfreq'],
-            metadata=metadata, preload=preload, picks=picks, reject=reject,
-            flat=flat, on_missing=on_missing, verbose=verbose)
-        if drop_bad_windows:
-            mne_epochs.drop_bad()
-        windows_ds = WindowsDataset(mne_epochs, ds.description,)
-    else:
-        windows_ds = EEGWindowsDataset(
-            ds.raw, metadata=metadata, description=ds.description,)
-    # add window_kwargs and raw_preproc_kwargs to windows dataset
-    setattr(windows_ds, 'window_kwargs', window_kwargs)
-    kwargs_name = 'raw_preproc_kwargs'
-    if hasattr(ds, kwargs_name):
-        setattr(windows_ds, kwargs_name, getattr(ds, kwargs_name))
-        
-    print()
-    return windows_ds
 
 
 
 
-def _compute_window_inds(
-        starts, stops, start_offset, stop_offset, size, stride,
-        drop_last_window, accepted_bads_ratio):
-    """Compute window start and stop indices.
-
-    Create window starts from trial onsets (shifted by start_offset) to trial
-    end (shifted by stop_offset) separated by stride, as long as window size
-    fits into trial.
-
-    Parameters
-    ----------
-    starts: array-like
-        Trial starts in samples.
-    stops: array-like
-        Trial stops in samples.
-    start_offset: int
-        Start offset from original trial onsets in samples.
-    stop_offset: int
-        Stop offset from original trial stop in samples.
-    size: int
-        Window size.
-    stride: int
-        Stride between windows.
-    drop_last_window: bool
-        Toggles of shifting last window within range or dropping last samples.
-    accepted_bads_ratio: float
-        Acceptable proportion of bad trials within a raw. If the number of
-        trials whose length is exceeded by the window size is smaller than
-        this, then only the corresponding trials are dropped, but the
-        computation continues. Otherwise, an error is raised.
-
-    Returns
-    -------
-    result_lists: (list, list, list, list)
-        Trial, i_window_in_trial, start sample and stop sample of windows.
-    """
-    starts = np.array([starts]) if isinstance(starts, int) else starts
-    stops = np.array([stops]) if isinstance(stops, int) else stops
-
-    starts += start_offset
-    stops += stop_offset
-    
-    #print()
-    #print('starts ', starts)
-    #print('stops ', stops)
-
-
-    # if window size is larger than the event
-    if any(size > (stops-starts)):
-        
-        bads_mask = size > (stops-starts)
-        print('bads_mask', bads_mask)
-        min_duration = (stops-starts)
-        if sum(bads_mask) <= accepted_bads_ratio * len(starts):
-            starts = starts[np.logical_not(bads_mask)]
-            stops = stops[np.logical_not(bads_mask)]
-            warnings.warn(
-                f'Trials {np.where(bads_mask)[0]} are being dropped as the '
-                f'window size ({size}) exceeds their duration {min_duration}.')
-        else:
-            current_ratio = sum(bads_mask) / len(starts)
-            raise ValueError(f'Window size {size} exceeds trial duration '
-                             f'({min_duration}) for too many trials '
-                             f'({current_ratio * 100}%). Set '
-                             f'accepted_bads_ratio to at least {current_ratio}'
-                             'and restart training to be able to continue.')
-
-    
-    #print()
-    #print('starts ', starts)
-    #print('stops ', stops)
-    
-    i_window_in_trials, i_trials, window_starts = [], [], []
-    for start_i, (start, stop) in enumerate(zip(starts, stops)):
-        # Generate possible window starts with given stride between original
-        # trial onsets (shifted by start_offset) and stops
-        possible_starts = np.arange(start, stop, stride)
-
-        # Possible window start is actually a start, if window size fits in
-        # trial start and stop
-        for i_window, s in enumerate(possible_starts):
-            if (s + size) <= stop:
-                window_starts.append(s)
-                i_window_in_trials.append(i_window)
-                i_trials.append(start_i)
-
-        # If the last window start + window size is not the same as
-        # stop + stop_offset, create another window that overlaps and stops
-        # at onset + stop_offset
-        if not drop_last_window:
-            if window_starts[-1] + size != stop:
-                window_starts.append(stop - size)
-                i_window_in_trials.append(i_window_in_trials[-1] + 1)
-                i_trials.append(start_i)
-
-    # Update stops to now be event stops instead of trial stops
-    window_stops = np.array(window_starts) + size
-    if not (len(i_window_in_trials) == len(window_starts) == len(window_stops)):
-        raise ValueError(f'{len(i_window_in_trials)} == '
-                         f'{len(window_starts)} == {len(window_stops)}')
-
-    return i_trials, i_window_in_trials, window_starts, window_stops
 
 
 
 
-def _get_windowing_kwargs(windowing_func_locals):
-    input_kwargs = windowing_func_locals
-    input_kwargs.pop('ds')
-    windowing_kwargs = {k: v for k, v in input_kwargs.items()}
-    return windowing_kwargs
-'''
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

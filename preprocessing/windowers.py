@@ -176,31 +176,6 @@ def _screen_annotations_based_on_description(edf_raw, keyword_to_remove):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def create_window_from_TERM_annotations( 
         concat_ds, start_offset_seconds=0, stop_offset_seconds=None,
         window_size_seconds=None, window_stride_seconds=None, 
@@ -270,7 +245,6 @@ def _create_window_from_TERM_annotations(
         # already includes last incomplete window start
         starts = np.arange(start_offset_samples, last_potential_start + 1, window_stride_samples)
 
-
         # get targets from dataset description if they exist
         target = -1 if ds.target_name is None else ds.description[ds.target_name]
         if mapping is not None:
@@ -280,7 +254,6 @@ def _create_window_from_TERM_annotations(
             # in case of single value target
             else:
                 target = mapping[target]
-
 
         i_window_in_trial = np.arange(len(starts))
         i_start_in_trial = starts
@@ -308,17 +281,13 @@ def _create_window_from_TERM_annotations(
     # If you have TERM seizure in the recording    
     elif ds.description['pathological session (TERM label)']:
         #crop the extremities to remove the start and stop offsets: 
-        ds.raw.crop(tmin = start_offset_seconds, tmax = length_seconds-stop_offset_seconds, include_tmax=True)
+        ds.raw.crop(tmin = start_offset_seconds, tmax = length_seconds-stop_offset_seconds, include_tmax=False)
         
         #for all of the rest of the TERM time and SEIZURE annotations, crop the samples.
         temp =[]
-        #print(ds.raw.info)
-        #print('SECONDS LENGTH', length_seconds)
-        #print('AFTER CROP LENGTH', ds.raw.n_times/ds.raw.info['sfreq'])
         for i in range(len(ds.raw.annotations)):   
             if 'seiz' in ds.raw.annotations[i]['description']:
                 temp.append(ds.raw.annotations[i])
-                #print(ds.raw.annotations[i])
                 
         list_of_raw_term_sz_segments = []                  
         try :
@@ -326,49 +295,29 @@ def _create_window_from_TERM_annotations(
         except:
             pass
          
+        seizure_segments_full_length = []
         for i in range(len(list_of_raw_term_sz_segments)):
             try:
-                list_of_ds.append(BaseDataset(raw = list_of_raw_term_sz_segments[i], 
+                seizure_segments_full_length.append(BaseDataset(raw = list_of_raw_term_sz_segments[i], 
                                               description = ds.description,  
                                               transform = ds.transform,                                     
                                               target_name = ds.target_name))
             except:
                 pass
+                
+        # individually divide them in small fixed length windows, which you append to list_of_ds
+        # note, you use the same window length and overlap as for background segmentation
+        for seizure_segment_full_length in seizure_segments_full_length:                    
+            length_seconds=seizure_segment_full_length.raw.n_times/seizure_segment_full_length.raw.info['sfreq']
+            last_potential_start = length_seconds - window_size_seconds
+            starts = np.arange(0, last_potential_start, window_stride_seconds) 
+            stops = starts + window_size_seconds
+                    
+            for start in range(len(starts)):
+                ds = seizure_segment_full_length.raw.copy()
+                list_of_ds.append(BaseDataset(raw = ds.crop(tmin=starts[start], tmax=stops[start], include_tmax=False), description = seizure_segment_full_length.description, transform = seizure_segment_full_length.transform,target_name = seizure_segment_full_length.target_name))
         
-        
-        
-
     return list_of_ds
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

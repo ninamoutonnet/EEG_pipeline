@@ -90,9 +90,16 @@ class CHBMIT(BaseConcatDataset):
                                   preload=preload, 
                                   verbose='ERROR')
         
-        bad_channels_chb_mit = ['.-0','.-1','.-2','.-3','.-4']        
+        bad_channels_chb_mit = ['.-0','.-1','.-2','.-3','.-4','']        
         raw.drop_channels(ch_names=bad_channels_chb_mit,
                          on_missing='ignore')
+        
+        # remove the redundant channel but double check if they are acctually equal
+        # then rename the channel that remains
+        if preload: 
+            if (raw.get_data(['T8-P8-1']) ==  raw.get_data(['T8-P8-0'])).all():
+                raw.drop_channels(ch_names='T8-P8-0')
+                raw.rename_channels({'T8-P8-1' : 'T8-P8'})
     
         # if using TUSZ, extract the annotations here and add them to the raw files 
         # probably more efficient than doing it in the TUSZ class

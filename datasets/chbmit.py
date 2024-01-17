@@ -86,8 +86,13 @@ class CHBMIT(BaseConcatDataset):
 
         # parse age and gender information from the txt file called 'subject info'
         age, gender = _parse_age_and_gender_from_txt_file(file_path)
-        raw = mne.io.read_raw_edf(file_path, preload=preload, verbose='ERROR')
+        raw = mne.io.read_raw_edf(file_path, 
+                                  preload=preload, 
+                                  verbose='ERROR')
         
+        bad_channels_chb_mit = ['.-0','.-1','.-2','.-3','.-4']        
+        raw.drop_channels(ch_names=bad_channels_chb_mit,
+                         on_missing='ignore')
     
         # if using TUSZ, extract the annotations here and add them to the raw files 
         # probably more efficient than doing it in the TUSZ class

@@ -100,12 +100,14 @@ class CHBMIT(BaseConcatDataset):
         # if the file 'file_path.seizures' exist, then that file contains seizures and annotations need to be created
         file_path_seizure = file_path + ".seizures"
         if os.path.isfile(file_path_seizure):
-            print(file_path)
+            #print(file_path)
 
             recording_type_TERM = 'seizure' 
             annotations = _parse_term_based_annotations_from_txt_file(file_path)  
             raw = raw.set_annotations(annotations, on_missing='warn')
         
+        # set the subject ID:
+        raw.info['subject_info']['his_id'] = description['subject']
         
         d = {
                 'age': age,

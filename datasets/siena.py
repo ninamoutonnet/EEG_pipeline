@@ -11,7 +11,7 @@ import os
 import glob
 import warnings
 from unittest import mock
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Iterable
 
 import pandas as pd
@@ -108,7 +108,10 @@ class Siena(BaseConcatDataset):
         recording_type_EVENT = None # the Siena dataset does not contain channel specific annotations, so default is None
         
         # Create annotation 
-        annotations = _parse_term_based_annotations_from_txt_file(file_path, raw.info['meas_date'])  
+        annotations = _parse_term_based_annotations_from_txt_file(file_path, raw.info['meas_date']) 
+        # print('recording length' , str(timedelta(seconds=raw.times[-1])))
+        # print('recording length min' , (timedelta(seconds=raw.times[-1])).seconds/60)
+
         raw = raw.set_annotations(annotations, on_missing='warn')
         
         # set the subject ID:
@@ -128,7 +131,6 @@ class Siena(BaseConcatDataset):
         additional_description = pd.Series(d)
         description = pd.concat([description, additional_description])
         base_dataset = BaseDataset(raw, description, target_name=target_name)
-        
         return base_dataset
 
 
@@ -138,7 +140,7 @@ def _parse_term_based_annotations_from_txt_file(file_path, orig_time):
     # get:  /physionet.org/files/siena-scalp-eeg/1.0.0/PN00/Seizures-list-PN00.txt
     
     file_path = os.path.normpath(file_path)
-    print(file_path)
+    # print(file_path)
     tokens = file_path.split(os.sep)
     # Remove last part of path
     subject_id_and_rec_nb = tokens[-1]  # PN00-1.edf
@@ -164,7 +166,7 @@ def _parse_term_based_annotations_from_txt_file(file_path, orig_time):
     sz_start_time =[]
     sz_end_time = []
     
-    print(subject_id_and_rec_nb)
+    # print(subject_id_and_rec_nb)
     
     #manual extraction as structure is different for this subject - inconsistency 
     if subject_id_and_rec_nb == 'PN01-1.edf':
@@ -198,7 +200,11 @@ def _parse_term_based_annotations_from_txt_file(file_path, orig_time):
     elif subject_id_and_rec_nb == 'PN06-4.edf':
         sz_start_time.append('12.55.08')
         sz_end_time.append('12.56.11')
-        
+     
+    # in the txt file, this seizure lasts longer than the recording. Assumed it is a typo.
+    elif subject_id_and_rec_nb == 'PN00-3.edf':
+        sz_start_time.append('18.28.29')
+        sz_end_time.append('18.29.29')
         
     # Note: PN05 has seizure number 2,3,4 but not 1. 
       
@@ -213,9 +219,9 @@ def _parse_term_based_annotations_from_txt_file(file_path, orig_time):
         sz_end_time.append((summary_list[index+4]).split(':')[1].split()[0])
         sz_start_time.append((summary_list[index+3]).split(':')[1].split()[0])
     
-    print(sz_start_time)
-    print(sz_end_time)
-    print('recording start time ', orig_time.time())
+    # print(sz_start_time)
+    # print(sz_end_time)
+    # print('recording start time ', orig_time.time())
     
     
     # Find the times and durations in seconds to populate mne.Annotation object
@@ -302,7 +308,7 @@ def _parse_subject_info(file_path):
 def _parse_bad_channel_info(file_path, raw_channels):
     
     ####################################################
-    # NOTE: in PN10 - removes rhe Fp2 channel, why?
+    # NOTE: in PN10 - removes rhe Fp2 channel, why? Because the raw edf files do not have a Fp2 channel
     
     good_channels = []
     good_raw_channels = []

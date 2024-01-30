@@ -94,16 +94,19 @@ class Siena(BaseConcatDataset):
         
         # Get rid of useless channels in the raw file. 
         # "Each folder also includes a text file named Seizures-list-PNxx.txt containing: data sampling rate (in Hz); the list of the channels from which the EEG and EKG signals are extracted (all other channels in the edf files must be ignored); "
-        bad_channels_chb_mit = _parse_bad_channel_info(file_path, raw.info['ch_names'])     
-        raw.drop_channels(ch_names=bad_channels_chb_mit,
-                         on_missing='ignore')
         
+        # print('initial channels: ', raw.info['ch_names'])
+        
+        bad_channels_siena = _parse_bad_channel_info(file_path, raw.info['ch_names'])     
+        raw.drop_channels(ch_names=bad_channels_siena, on_missing='ignore')
+        
+        # print('after channel drop: ', raw.info['ch_names'])
+
+
         # default
         recording_type_TERM = 'seizure' # the edf files of Siena all contain at least 1 seizure 
         recording_type_EVENT = None # the Siena dataset does not contain channel specific annotations, so default is None
         
-        
-        #################################################################
         # Create annotation 
         annotations = _parse_term_based_annotations_from_txt_file(file_path, raw.info['meas_date'])  
         raw = raw.set_annotations(annotations, on_missing='warn')
@@ -114,6 +117,9 @@ class Siena(BaseConcatDataset):
         d = {
                 'age': age,
                 'gender': gender,
+                'seizure type': sz_type,
+                'localisation': localisation,
+                'lateralisation': lateralisation,
                 'pathological session (TERM label)': 'seizure' in recording_type_TERM,
                 'pathological session (EVENT labels)': False      
         }
@@ -225,22 +231,18 @@ def _parse_term_based_annotations_from_txt_file(file_path, orig_time):
         orig_time_no_tz = datetime.strptime(str(orig_time.time()), date_format_2)
         sz_start_no_tz = datetime.strptime(str(datetime.strptime(sz_start_time[seizure_index], date_format).time()), date_format_2)      
         # onset array of float, shape (n_annotations,) The starting time of annotations in seconds after orig_time.
-        print('rec start time: ', orig_time_no_tz)
-        print('seiz start time: ', sz_start_no_tz)
+        # print('rec start time: ', orig_time_no_tz)
+        # print('seiz start time: ', sz_start_no_tz)
         seizure_onset_seconds =  (sz_start_no_tz - orig_time_no_tz).seconds
-        print('onset in seconds: ', seizure_onset_seconds) 
+        # print('onset in seconds: ', seizure_onset_seconds) 
         sz_onset.append(seizure_onset_seconds)
         
         
         sz_description.append("Seizure "+str(seizure_index+1))
         
-    
-    print('onset ', sz_onset)
-    print('duration ', sz_duration)
-    print('description: ', sz_description)
-    print()
-
-
+    #print('onset ', sz_onset)
+    #print('duration ', sz_duration)
+    #print('description: ', sz_description)
     
     csvbi_annotations = mne.Annotations(onset = sz_onset, 
                                         duration = sz_duration, 
@@ -299,6 +301,9 @@ def _parse_subject_info(file_path):
 
 def _parse_bad_channel_info(file_path, raw_channels):
     
+    ####################################################
+    # NOTE: in PN10 - removes rhe Fp2 channel, why?
+    
     good_channels = []
     good_raw_channels = []
     
@@ -325,12 +330,13 @@ def _parse_bad_channel_info(file_path, raw_channels):
     
     # Channel 5 always show '1' but should be 'O1', change it here: 
     good_channels = ['EEG O1' if x=='EEG 1' else x for x in good_channels]
-    
+        
     for channel in good_channels:
         good_raw_channel = [raw_channel for raw_channel in raw_channels if (channel in raw_channel)]
         if good_raw_channel != []:
             good_raw_channels.append(good_raw_channel[0])
             
+    
     # Removing elements present in other list
     bad_channels = [i for i in raw_channels if i not in good_raw_channels]
     

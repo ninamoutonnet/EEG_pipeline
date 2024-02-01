@@ -229,7 +229,7 @@ def _remove_unknown_channels(raw, channels_to_remove):
     return raw.drop_channels(ch_names = channels_to_remove, on_missing='ignore')  
    
         
-def _parse_event_based_annotations_from_csv_bi_file(file_path):
+def _parse_term_based_annotations_from_csv_bi_file(file_path):
     csv_bi_path = file_path.replace('.edf', '.csv_bi')
     csvbi_file = pd.read_csv(csv_bi_path, header=5)   
     # at the top of every file, there is a header that should not be read, example of header below
@@ -249,7 +249,7 @@ def _parse_event_based_annotations_from_csv_bi_file(file_path):
     return csvbi_annotations
 
 
-def _parse_term_based_annotations_from_csv_file(file_path): 
+def _parse_event_based_annotations_from_csv_file(file_path): 
     csv_path = file_path.replace('.edf', '.csv')
     csv_file =  pd.read_csv(csv_path, header=5) 
     # at the top of every file, there is a header that should not be read, example of header below

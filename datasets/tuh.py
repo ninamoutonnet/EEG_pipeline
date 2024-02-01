@@ -100,9 +100,8 @@ class TUH(BaseConcatDataset):
         # reading the raws and potentially preloading the data
         # disable joblib for tests. mocking seems to fail otherwise
         if n_jobs == 1:
-            base_datasets = [self._create_dataset(descriptions[i], target_name, preload, remove_unknown_channels, 
-                                                  set_bipolar_tcp)
-                for i in descriptions.columns]
+            base_datasets = [self._create_dataset(descriptions[i], target_name, preload, remove_unknown_channels,set_bipolar_tcp) for i in descriptions.columns]
+                
         else:
             base_datasets = Parallel(n_jobs)(delayed(
                 self._create_dataset)(descriptions[i], target_name, preload, remove_unknown_channels, set_bipolar_tcp) for i 
@@ -122,15 +121,22 @@ class TUH(BaseConcatDataset):
             raw = _remove_unknown_channels(raw, channels_to_remove)
         
         # If set_bipolar_tcp is true, re-reference. As this depends on the montage, extract that information first
-        if set_bipolar_tcp: 
-            raw = _set_bipolar_tcp(raw, file_path)
+        if set_bipolar_tcp:
+            try:
+                raw = _set_bipolar_tcp(raw, file_path)
+            except: 
+                print('ISSUE WITH REFERENCE: ', file_path)
+                return
         
         # if using TUSZ, extract the annotations here and add them to the raw files 
         # probably more efficient than doing it in the TUSZ class
         tokens = file_path.split(os.sep) 
+        
+        # default
         recording_type_TERM = 'background' 
-
+        recording_type_EVENT = 'background' 
         if ('tuh_eeg_seizure') in tokens:
+        
             annotation_csvbi = _parse_term_based_annotations_from_csv_bi_file(file_path)
             for annotation in annotation_csvbi:
                 if 'seiz' in annotation['description']:
@@ -139,7 +145,22 @@ class TUH(BaseConcatDataset):
             # annotation_csv does not work if the ch_names do not match the raw file channels
             # so it needs to have a tcp re-reference the raw file 
             if set_bipolar_tcp: 
-                annotation_csv = _parse_term_based_annotations_from_csv_file(file_path)
+                annotation_csv = _parse_event_based_annotations_from_csv_file(file_path)
+                
+                for annotation in annotation_csv:
+                    if ('absz' in annotation['description']):
+                        recording_type_EVENT = 'seizure'
+                    elif ('gnsz' in annotation['description']):
+                        recording_type_EVENT = 'seizure'
+                    elif ('fnsz' in annotation['description']):
+                        recording_type_EVENT = 'seizure'
+                    elif ('tcsz' in annotation['description']):
+                        recording_type_EVENT = 'seizure'        
+                    elif ('tnsz' in annotation['description']):
+                        recording_type_EVENT = 'seizure'
+                    elif('cpsz' in annotation['description']):
+                        recording_type_EVENT = 'seizure'
+                                      
                 annotations = annotation_csvbi.append(onset=annotation_csv.onset, 
                                                  duration=annotation_csv.duration, 
                                                  description=annotation_csv.description,
@@ -148,21 +169,28 @@ class TUH(BaseConcatDataset):
             else:
                 raw = raw.set_annotations(annotation_csvbi, on_missing='warn')
             
+
             
-            
-        meas_date = datetime(1, 1, 1, tzinfo=timezone.utc) \
-            if raw.info['meas_date'] is None else raw.info['meas_date']
+        meas_date = datetime(1, 1, 1, tzinfo=timezone.utc) if raw.info['meas_date'] is None else raw.info['meas_date']
         # if this is old version of the data and the year could be parsed from
         # file paths, use this instead as before
         if 'year' in description:
             meas_date = meas_date.replace(*description[['year', 'month', 'day']])
         raw.set_meas_date(meas_date)
 
-        d = {
-            'age': int(age),
-            'gender': gender,
-            'pathological': recording_type_TERM
-        }
+        if ('tuh_eeg_seizure') in tokens:
+            d = {
+                'age': int(age),
+                'gender': gender,
+                'pathological session (TERM label)': 'seizure' in recording_type_TERM,
+                'pathological session (EVENT labels)': 'seizure' in recording_type_EVENT       
+            }
+        else: 
+            d = {
+                'age': int(age),
+                'gender': gender
+            }
+        
         # if year exists in description = old version
         # if not, get it from meas_date in raw.info and add to description
         # if meas_date is None, create fake one
@@ -173,8 +201,8 @@ class TUH(BaseConcatDataset):
             
         additional_description = pd.Series(d)
         description = pd.concat([description, additional_description])
-        base_dataset = BaseDataset(raw, description,
-                                   target_name=target_name)
+        base_dataset = BaseDataset(raw, description, target_name=target_name)
+        
         return base_dataset
 
 def _set_bipolar_tcp(raw, file_path):
@@ -201,7 +229,7 @@ def _remove_unknown_channels(raw, channels_to_remove):
     return raw.drop_channels(ch_names = channels_to_remove, on_missing='ignore')  
    
         
-def _parse_term_based_annotations_from_csv_bi_file(file_path):
+def _parse_event_based_annotations_from_csv_bi_file(file_path):
     csv_bi_path = file_path.replace('.edf', '.csv_bi')
     csvbi_file = pd.read_csv(csv_bi_path, header=5)   
     # at the top of every file, there is a header that should not be read, example of header below
@@ -315,7 +343,7 @@ def _parse_description_from_file_path(file_path):
     # stackoverflow.com/questions/3167154/how-to-split-a-dos-path-into-its-components-in-python  # noqa
     file_path = os.path.normpath(file_path)
     tokens = file_path.split(os.sep)
-    # Extract version number and tuh_eeg_abnormal/tuh_eeg from file path
+    # Extract version number and tuh_eeg_abnormal from file path
     if ('tuh_eeg_abnormal' in tokens): #
         abnormal = True
         # Tokens[-2] is channel configuration (always 01_tcp_ar in abnormal)
@@ -500,4 +528,4 @@ class TUHSeizure(TUH):
         }
 
     
-
+    
